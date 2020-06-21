@@ -1,0 +1,13 @@
+cmake_minimum_required (VERSION 2.6)
+project (ahm_test C)
+
+if (CMAKE_C_COMPILER_ID MATCHES "GNU|Clang")
+    set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -pedantic -Wall")
+endif()
+
+add_library(ahm ahm.c)
+add_executable(ahm_write ahm_write.c)
+target_link_libraries(ahm_write ahm)
+
+add_executable(ahm_read ahm_read.c)
+target_link_libraries(ahm_read ahm)
