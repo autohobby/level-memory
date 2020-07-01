@@ -49,14 +49,16 @@ void ahm_get_mcb(const char* filename, ahm_mcb* mcb) {
 }
 
 int ahm_open(ahm_mcb* mcb, const char* filename, const int size) {
+    printf("ahm open begin");
     mcb->shmsize = size;
     mcb->shmkey = ftok(filename, 0);
-    if (mcb->shmkey==-1) {
-        mcb->shmkey=3;
-    }
-    printf("%d %d\n", mcb->shmsize, mcb->shmkey);
-    printf("%s\n", filename);
+    // if (mcb->shmkey==-1) {
+    //     mcb->shmkey=3;
+    // }
     mcb->shmid = shmget(mcb->shmkey, mcb->shmsize, 0644 | IPC_CREAT);
+    printf("shmsize: %d shmkey: %d shmid: %d\n", mcb->shmsize, mcb->shmkey,
+                                                 mcb->shmid);
+    printf("filename: %s\n", filename);
     if (mcb->shmid==-1) {
         perror("shmget");
         return -1;
@@ -147,66 +149,225 @@ void ahm_f1array_push(ahm_f1array* ahm_f1array) {
 
 /*
 */
-bool ahm_open_e1array(ahm_e1array* e1array, const char *f,
-                      const uint32_t size, const uint32_t num) {
-    int total_size = 0;
+// bool ahm_open_e1array(ahm_e1array* e1array, const char *f,
+//                       const uint32_t size, const uint32_t num) {
+//     int total_size = 0;
+//     e1array->num = num;
+//     total_size = 2*4 + 4*num + size;
+//     return ahm_open(&(e1array->mcb), f, total_size);
+// }
+
+/*
+     l  r  v      b
+     4B 4B 4B*num 1B*size
+init 0  0  0      na
+l: bottom item index 
+r: top item index(un push)
+v: index vector
+b: item buf
+*/
+ahm_e1array* ahm_open_e1array(const char *f, const uint32_t size,
+                              const uint32_t num) {
+    ahm_e1array* e1array = malloc(sizeof(ahm_e1array));
+    e1array->mcb = malloc(sizeof(ahm_mcb));
+    // item num
     e1array->num = num;
-    total_size = 2 + 4*num + size;
-    return ahm_open(&(e1array->mcb), f, total_size);
-}
+    // buf size
+    e1array->size = size;
+    int total_size = 4 + 4 + 4*num + size;
 
-byte ahm_e1array_tptr(ahm_e1array* e1array, uint32_t* remain) {
-    uint32_t buf_idx0 = e1array->v[*(e1array->r)];
-    uint32_t buf_idx1 = e1array->v[*(e1array->l)];
-    *remain = (buf_idx1+e1array->size)-buf_idx0;
-    return e1array->mcb->buf+buf_idx0;
-}
+    printf("e1array total shm size: %d\n", total_size);
+    printf("e1array file path: %s\n", f);
 
-bool ahm_e1array_check_index(ahm_e1array* e1array, uint32_t index) {
-    return *e1array->l<=index && *e1array->r>index;
-}
-
-byte ahm_e1array_iptr(ahm_e1array* e1array, uint32_t index) {
-    uint32_t i;
-    if (!ahm_e1array_check_index(e1array, index)) {
-        return NULL;
+    if (ahm_open(e1array->mcb, f, total_size) == -1) {
+        perror("ahm e1array error");
     }
-    i = e1array->v[index%e1array->num];
-    return e1array->mcb->buf+i;
+
+    e1array->l = (uint32_t*)(e1array->mcb->buf);
+    e1array->r = (uint32_t*)(e1array->mcb->buf+4);
+    e1array->v = (uint32_t*)(e1array->mcb->buf+8);
+    e1array->b = e1array->mcb->buf+8+4*(e1array->num);
+
+    return e1array;
 }
 
-void ahm_e1array_push(ahm_e1array* ahm_e1array) {
-    *ahm_e1array->r ++;
+void ahm_e1array_init(ahm_e1array* e1array) {
+    *(e1array->l) = 0;
+    *(e1array->r) = 0;
+    e1array->v[0] = 0;
+    printf("e1array->b %p\n", e1array->b);
+    printf("init e1array success\n");
 }
 
-void ahm_e1array_memcpy(ahm_e1array* e1array, uint32_t i,
+
+// e1array top item buf index
+static inline uint32_t e1_rbi(ahm_e1array* e1array) {
+    return e1array->v[*(e1array->r)%e1array->num];
+}
+
+// e1array bottom item buf index
+static inline uint32_t e1_lbi(ahm_e1array* e1array) {
+    return e1array->v[*(e1array->l)%e1array->num];
+}
+
+// e1array i item buf index
+static inline uint32_t e1_ibi(ahm_e1array* e1array, uint32_t i) {
+    return e1array->v[i%e1array->num];
+}
+
+// static inline byte* _buf(ahm_e1array* e1array, uint32_t i) {
+//     return e1array->b[i];
+// }
+
+static inline bool empty(ahm_e1array* e1array) {
+    return *(e1array->l) == *(e1array->r);
+}
+
+// static inline void delete_l(ahm_e1array* e1array) {
+// }
+
+byte* ahm_e1array_tptr(ahm_e1array* e1array) {
+    return e1array->b+e1_rbi(e1array);
+}
+
+inline byte* ahm_e1array_iptr(ahm_e1array* e1array, uint32_t index) {
+    return e1array->b+e1_ibi(e1array, index);
+}
+
+uint32_t ahm_e1array_isize(ahm_e1array* e1array, uint32_t index) {
+    uint32_t i, j;
+
+    i = index%e1array->num;
+    j = (index+1)%e1array->num;
+
+    i = e1array->v[i];
+    j = e1array->v[j];
+    return (e1array->size+j-i)%e1array->size;
+}
+
+uint32_t ahm_e1array_remain(ahm_e1array* e1array) {
+    if (empty(e1array)) {
+        return e1array->size;
+    }
+    uint32_t remain = ((e1_lbi(e1array)+e1array->size)-e1_rbi(e1array)) % e1array->size;
+    return remain;
+    // return ((e1_lbi(e1array)+e1array->size)-e1_rbi(e1array)) % e1array->size;
+}
+
+inline bool ahm_e1array_checki(ahm_e1array* e1array, uint32_t index) {
+    return *e1array->l<=index && index < *e1array->r;
+}
+
+void ahm_e1array_cpy2buf(ahm_e1array* e1array, uint32_t bi,
                         byte* buf, uint32_t size) {
-    uint32_t remain = e1array->size - i;
-    if (remain) {
-        memcpy(e1array->mcb->buf+i, buf, size-remain);
-        memcpy(e1array->mcb->buf, buf+size-remain, remain);
+    uint32_t remain = e1array->size - bi;
+    if (remain < size) {
+        memcpy(buf, e1array->b+bi, size-remain);
+        memcpy(buf+size-remain, e1array->b, remain);
     } else {
-        memcpy(e1array->mcb->buf+i, buf, size);
+        // printf("memcpy %p %p %d\n", e1array->b+i, buf, size);
+        memcpy(buf, e1array->b+bi, size);
     }
 }
+
+void ahm_e1array_cpy2array(ahm_e1array* e1array, uint32_t bi,
+                        byte* buf, uint32_t size) {
+    int32_t remain = e1array->size - bi;
+    printf("bi %d size %d remain %d\n", bi, size, remain);
+    if (remain < size) {
+        printf("< bi %d size-remain %d\n", bi, size-remain);
+        memcpy(e1array->b+bi, buf, size-remain);
+        printf("< size-remain %d remain %d\n", size-remain, remain);
+        memcpy(e1array->b, buf+(size-remain), remain);
+    } else {
+        // printf("memcpy %p %p %d\n", e1array->b+i, buf, size);
+        memcpy(e1array->b+bi, buf, size);
+    }
+}
+
+// bool ahm_e1array_geti(ahm_e1array* e1array, uint32_t index, byte* buf, uint32_t* size) {
+//     uint32_t i, j;
+//     if (!ahm_e1array_checki(e1array, index)) {
+//         return 0;
+//     }
+
+//     i = index%e1array->num;
+//     j = (index+1)%e1array->num;
+
+//     i = e1array->v[i];
+//     j = e1array->v[j];
+    
+//     if (j>=i) {
+//         size = j-i;
+//         printf("memcpy %p %p %d\n", buf, e1array->b+i, size);
+//         memcpy(buf, e1array->b+i, size);
+//     } else {
+//         size = (j+e1array->size-i) % e1array->size;
+//         memcpy(buf, e1array->b+i, e1array->size-i);
+//         memcpy(buf+e1array->size-i, e1array->b, j);
+//     }
+//     return 1;
+// }
+
+// void ahm_e1array_push(ahm_e1array* ahm_e1array) {
+//     *ahm_e1array->r ++;
+// }
+
+// void ahm_e1array_memcpy(ahm_e1array* e1array, uint32_t i,
+//                         byte* buf, uint32_t size) {
+//     uint32_t remain = e1array->size - i;
+//     if (remain < size) {
+//         memcpy(e1array->b+i, buf, size-remain);
+//         memcpy(e1array->b, buf+size-remain, remain);
+//     } else {
+//         printf("memcpy %p %p %d\n", e1array->b+i, buf, size);
+//         memcpy(e1array->b+i, buf, size);
+//     }
+// }
 
 void ahm_e1array_pushtop(ahm_e1array* e1array, byte* buf, uint32_t size) {
-    uint32_t remain;
+    int32_t remain;
+    int32_t rbi = e1_rbi(e1array);
+
     if (e1array->size<size) {
         perror("size overload");
     }
-    uint32_t buf_idx0 = e1array->v[*(e1array->r)];
-    uint32_t buf_idx1 = e1array->v[*(e1array->l)];
-    remain = (buf_idx1+e1array->size)-buf_idx0;
+
+    remain = ahm_e1array_remain(e1array);
+    printf("remain: %d\n", remain);
+
+    printf("L: %d R: %d\n", *(e1array->l), *(e1array->r));
+    printf("lbi: %d rbi: %d\n", e1_lbi(e1array), e1_rbi(e1array));
+    printf("remain: %d size: %d\n", remain, size);
+
     remain -= size;
     while (remain<0) {
-        remain += e1array->v[(*e1array->l)+1]-e1array->v[*e1array->l];
-        *e1array->l ++;
+        remain += ahm_e1array_isize(e1array, *(e1array->l));
+        (*e1array->l) ++;
     }
-    ahm_e1array_memcpy(e1array, buf_idx0, buf, size);
+    // printf("mem %p %d %p %d\n", e1array, buf_idx0, buf, size);
+    // ahm_e1array_memcpy(e1array, buf_idx0, buf, size);
+    printf("bi: %d\n", rbi);
+
+    ahm_e1array_cpy2array(e1array, rbi, buf, size);
+
+    printf("memcp over\n");
+
+    if ( ((*e1array->r)+1)%e1array->num == (*e1array->l)%e1array->num ) {
+        (*e1array->l) ++;
+    }
+
+    (*e1array->r) ++;
+    e1array->v[(*e1array->r)%e1array->num] = (rbi+size)%e1array->size;
+
+    printf("L: %d R: %d\n", *(e1array->l), *(e1array->r));
+    printf("lbi: %d rbi: %d\n", e1_lbi(e1array), e1_rbi(e1array));
+    // printf("idx %d\n", buf_idx0);
+    // printf("remain %d\n", remain);
+    // printf("%d %d\n", *e1array->l, *e1array->r);
+    // printf("%d %d\n", e1array->v[*e1array->l], e1array->v[*e1array->l]);
 }
 
-
-void ahm_e1array_popbtm(ahm_e1array* e1array) {
-    *e1array->l ++;
-}
+// void ahm_e1array_popbtm(ahm_e1array* e1array) {
+//     *e1array->l ++;
+// }

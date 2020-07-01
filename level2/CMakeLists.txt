@@ -49,6 +49,11 @@ target_link_libraries(ahm_write ahm)
 add_executable(ahm_read ahm_read.c)
 target_link_libraries(ahm_read ahm)
 
+add_executable(e1array_write e1array_write.c)
+target_link_libraries(e1array_write ahm)
+
+add_executable(e1array_read e1array_read.c)
+target_link_libraries(e1array_read ahm)
 
 ADD_EXECUTABLE(video_write
     video_write.cpp
